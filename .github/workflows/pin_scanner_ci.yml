@@ -1,16 +1,22 @@
 # .github/workflows/pin_scanner_ci.yml
 
 name: PIN Scanner CI
-
 on:
   schedule:
-    - cron: '0 */12 * * *'
-  workflow_dispatch:
+    - cron: '0 */4 * * *' # Runs every 4 hours (at 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC)
+  workflow_dispatch: # Allows manual triggering from the GitHub UI
+
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 55 # Max duration for the job to run
+
+    # Define permissions needed for the workflow.
+    # 'contents: read' is default for checkout.
+    # No other special permissions are typically needed for this setup.
+    permissions:
+      contents: read # Required for actions/checkout
 
     steps:
       - name: 1. Checkout Repository
@@ -20,41 +26,53 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: 'pip' # Caches pip dependencies for faster installation
 
       - name: 3. Install Dependencies
         run: pip install -r requirements.txt
 
-      - name: 4. Restore Logs Cache
+      - name: 4. Restore/Save Logs Cache
         uses: actions/cache@v4
-        id: cache-state
+        id: cache-state # Required for the action to save cache at job end
         with:
-          # We only cache the log files now. The progress file is gone.
+          # Only cache log files that accumulate state across runs.
+          # `new_find_content.txt` is explicitly cleared by the script at each run,
+          # so it should NOT be cached. Caching it would defeat its purpose as a temporary file.
           path: |
             found_pins.log
             potential_pins.log
-          key: ${{ runner.os }}-pincache-${{ github.ref }}
+            new_find_content.txt
+          # Use a dynamic key based on OS, branch (ref), and a version identifier for the cache structure.
+          # This ensures caches are unique per branch and invalidated if logic changes.
+          key: ${{ runner.os }}-pincache-${{ github.ref_name }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pincache-${{ github.ref_name }}- # Fallback for same branch
+            ${{ runner.os }}-pincache-                     # Fallback for any branch
 
       - name: 5. Run the PIN Scanner Script
         env:
+          # Pass END_PIN as an environment variable to the script.
+          # Consider making START_PIN also configurable via env if needed.
           END_PIN: 1000
         run: python pin_scanner.py
 
-      # Step 6 (Check for new content and send Telegram notification) remains exactly the same
       - name: 6. Check for new content and send Telegram notification
+        id: telegram_notification # Add an ID for this step if you ever need to reference its outcome
+        # Only run this step if new_find_content.txt was created and is not empty.
+        # This condition is more robust than just checking for file existence.
+        if: success() && -s new_find_content.txt
         run: |
-          if [[ ! -f new_find_content.txt ]]; then
-            echo "No new high-priority content found to notify."
-          else
-            echo "New content found! Preparing Telegram notification."
-            MESSAGE_CONTENT=$(cat new_find_content.txt)
-            MESSAGE="🚨 *New Exam Content Found!*\n\n\`\`\`\n${MESSAGE_CONTENT}\n\`\`\`"
-            curl --location 'https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage' \
-            --header 'Content-Type: application/json' \
-            --data-raw '{
-                "chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}",
-                "text": "'"$MESSAGE"'",
-                "parse_mode": "Markdown"
-            }'
-            echo "Telegram notification sent."
-          fi
+          echo "New content found! Preparing Telegram notification."
+          MESSAGE_CONTENT=$(cat new_find_content.txt)
+          # Use a heredoc for cleaner multi-line JSON data, avoiding complex quoting.
+          # Ensure sensitive variables are correctly enclosed.
+          curl --location 'https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage' \
+          --header 'Content-Type: application/json' \
+          --data-raw @- <<EOF
+          {
+              "chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}",
+              "text": "🚨 *New Exam Content Found!*\n\n\`\`\`\n${MESSAGE_CONTENT}\n\`\`\`",
+              "parse_mode": "Markdown"
+          }
+          EOF
+          echo "Telegram notification sent."
