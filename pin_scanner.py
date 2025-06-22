@@ -1,7 +1,6 @@
 # pin_scanner.py (DEBUGGING VERSION)
 import os
 import re
-import sys
 import time
 
 import requests
