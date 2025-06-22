@@ -51,22 +51,40 @@ jobs:
         run: python pin_scanner.py
 
       - name: 6. Check for new content and send Telegram notification
-        id: telegram_notification # Add an ID for this step if you ever need to reference its outcome
-        # Only run this step if new_find_content.txt was created and is not empty.
-        # This condition is more robust than just checking for file existence.
+        id: telegram_notification
         if: success() && hashFiles('new_find_content.txt') != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           echo "New content found! Preparing Telegram notification."
           MESSAGE_CONTENT=$(cat new_find_content.txt)
-          # Use a heredoc for cleaner multi-line JSON data, avoiding complex quoting.
-          # Ensure sensitive variables are correctly enclosed.
-          curl --location 'https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage' \
-          --header 'Content-Type: application/json' \
-          --data-raw @- <<EOF
-          {
-              "chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}",
-              "text": "🚨 *New Exam Content Found!*\n\n\`\`\`\n${MESSAGE_CONTENT}\n\`\`\`",
-              "parse_mode": "Markdown"
-          }
-          EOF
-          echo "Telegram notification sent."
+          MESSAGE_LENGTH=$(wc -c < new_find_content.txt)
+          TELEGRAM_API="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}"
+          MAX_MSG_LENGTH=4096
+
+          if [ "$MESSAGE_LENGTH" -le "$MAX_MSG_LENGTH" ]; then
+            # The message content is wrapped in a MarkdownV2 code block.
+            # Note: The '!' in the title is escaped for MarkdownV2 compatibility.
+            TEXT_PAYLOAD="🚨 *New Exam Content Found*\!\n\n\`\`\`\n${MESSAGE_CONTENT}\n\`\`\`"
+
+            # Use jq to safely construct the JSON payload. This prevents injection
+            # vulnerabilities if the content contains special JSON characters.
+            JSON_PAYLOAD=$(jq -n \
+              --arg chat_id "${TELEGRAM_CHAT_ID}" \
+              --arg text "$TEXT_PAYLOAD" \
+              '{chat_id: $chat_id, text: $text, parse_mode: "MarkdownV2"}')
+
+            curl --fail --location "${TELEGRAM_API}/sendMessage" \
+              --header 'Content-Type: application/json' \
+              --data-raw "${JSON_PAYLOAD}"
+            echo "Telegram notification sent as text."
+          else
+            # If the message is too long, send it as a document with a caption.
+            curl --fail --location "${TELEGRAM_API}/sendDocument" \
+              -F chat_id="${TELEGRAM_CHAT_ID}" \
+              -F document="@new_find_content.txt" \
+              -F caption="🚨 *New Exam Content Found*\! (content too long for a message)" \
+              -F parse_mode="MarkdownV2"
+            echo "Telegram notification sent as document."
+          fi
