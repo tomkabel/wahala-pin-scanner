@@ -47,7 +47,7 @@ jobs:
         env:
           # Pass END_PIN as an environment variable to the script.
           # Consider making START_PIN also configurable via env if needed.
-          END_PIN: 1000
+          END_PIN: 99999
         run: python pin_scanner.py
 
       - name: 6. Check for new content and send Telegram notification
